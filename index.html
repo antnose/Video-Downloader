@@ -612,7 +612,7 @@
     </script>
   </body>
 </html> -->
-
+<!-- 
 <!doctype html>
 <html lang="en">
   <head>
@@ -1058,6 +1058,352 @@
         ],
         "Paste YouTube link here",
       );
+    </script>
+  </body>
+</html> -->
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Media Downloader</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        max-width: 820px;
+        margin: 40px auto;
+        padding: 0 16px;
+      }
+      .tabs {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 24px;
+        flex-wrap: wrap;
+      }
+      .tab {
+        padding: 10px 18px;
+        font-size: 16px;
+        cursor: pointer;
+        border: 1px solid #888;
+        background: #f3f3f3;
+      }
+      .tab.active {
+        background: #222;
+        color: #fff;
+        border-color: #222;
+      }
+      .panel {
+        display: none;
+      }
+      .panel.active {
+        display: block;
+      }
+      .item {
+        margin-bottom: 14px;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .num {
+        width: 24px;
+        text-align: right;
+        color: #666;
+      }
+      input {
+        flex: 1;
+        padding: 8px;
+        font-size: 15px;
+      }
+      button.act {
+        padding: 8px 14px;
+        font-size: 15px;
+        cursor: pointer;
+      }
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.6;
+      }
+      .status {
+        margin: 4px 0 0 32px;
+        min-height: 18px;
+        font-size: 14px;
+      }
+      .error {
+        color: #b00020;
+      }
+      .ok {
+        color: #1b7f3b;
+      }
+      textarea {
+        width: 100%;
+        box-sizing: border-box;
+        height: 220px;
+        padding: 8px;
+        font-size: 14px;
+        font-family: monospace;
+      }
+      .bulk-bar {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        margin: 10px 0;
+      }
+      #bulkSummary {
+        font-size: 14px;
+      }
+      #bulkResults {
+        margin-top: 14px;
+        font-size: 14px;
+      }
+      .res {
+        padding: 6px 0;
+        border-bottom: 1px solid #eee;
+        word-break: break-all;
+      }
+      .res small {
+        display: block;
+        margin-top: 2px;
+      }
+    </style>
+  </head>
+  <body>
+    <h2>Media Downloader</h2>
+
+    <div class="tabs">
+      <button class="tab active" data-panel="facebook">
+        Facebook Downloader
+      </button>
+      <button class="tab" data-panel="youtube">YouTube Downloader</button>
+      <button class="tab" data-panel="bulk">Bulk Audio</button>
+    </div>
+
+    <div id="facebook" class="panel active"></div>
+    <div id="youtube" class="panel"></div>
+
+    <div id="bulk" class="panel">
+      <p>
+        Paste Facebook and/or YouTube links, one per line. Audio (MP3) files are
+        saved automatically into the <b>downloads</b> folder next to
+        <code>server.js</code>, with no browser prompts.
+      </p>
+      <textarea
+        id="bulkInput"
+        placeholder="https://www.facebook.com/reel/...&#10;https://www.youtube.com/watch?v=...&#10;one link per line"
+      ></textarea>
+      <div class="bulk-bar">
+        <button id="bulkStart" class="act">Start Download</button>
+        <span id="bulkSummary"></span>
+      </div>
+      <div id="bulkResults"></div>
+    </div>
+
+    <script>
+      const COUNT = 10;
+      const BULK_CONCURRENCY = 3; // how many links are processed at the same time
+
+      // ---------- Tabs ----------
+      document.querySelectorAll(".tab").forEach((tab) => {
+        tab.addEventListener("click", () => {
+          document
+            .querySelectorAll(".tab")
+            .forEach((t) => t.classList.remove("active"));
+          document
+            .querySelectorAll(".panel")
+            .forEach((p) => p.classList.remove("active"));
+          tab.classList.add("active");
+          document.getElementById(tab.dataset.panel).classList.add("active");
+        });
+      });
+
+      function filenameFrom(res, fallback) {
+        const cd = res.headers.get("Content-Disposition") || "";
+        const m = /filename="?([^";]+)"?/i.exec(cd);
+        return m ? m[1] : fallback;
+      }
+
+      // ---------- Single-row tabs ----------
+      function buildRows(containerId, source, buttons, placeholder) {
+        const container = document.getElementById(containerId);
+
+        for (let i = 1; i <= COUNT; i++) {
+          const item = document.createElement("div");
+          item.className = "item";
+          item.innerHTML = `
+          <div class="row">
+            <span class="num">${i}.</span>
+            <input type="url" placeholder="${placeholder}" />
+          </div>
+          <div class="status"></div>
+        `;
+
+          const row = item.querySelector(".row");
+          const input = item.querySelector("input");
+          const statusEl = item.querySelector(".status");
+          const btnEls = [];
+
+          buttons.forEach(({ label, format }) => {
+            const btn = document.createElement("button");
+            btn.className = "act";
+            btn.textContent = label;
+            btnEls.push(btn);
+            row.appendChild(btn);
+
+            btn.addEventListener("click", async () => {
+              if (!input.value.trim()) {
+                statusEl.className = "status error";
+                statusEl.textContent = "Please paste a link first.";
+                return;
+              }
+
+              btnEls.forEach((b) => (b.disabled = true));
+              input.disabled = true;
+              statusEl.className = "status";
+              statusEl.textContent =
+                format === "video"
+                  ? "Downloading video... this can take a while."
+                  : "Converting to audio...";
+
+              try {
+                const res = await fetch("/download", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ url: input.value, source, format }),
+                });
+
+                if (!res.ok) {
+                  const data = await res.json().catch(() => ({}));
+                  throw new Error(data.error || "Something went wrong.");
+                }
+
+                const fallback = `${source}-${i}.${format === "audio" ? "mp3" : "mp4"}`;
+                const name = filenameFrom(res, fallback);
+                const blob = await res.blob();
+                const a = document.createElement("a");
+                a.href = URL.createObjectURL(blob);
+                a.download = name;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(a.href);
+
+                statusEl.className = "status ok";
+                statusEl.textContent = "Done! Download started.";
+              } catch (err) {
+                statusEl.className = "status error";
+                statusEl.textContent = err.message;
+              } finally {
+                btnEls.forEach((b) => (b.disabled = false));
+                input.disabled = false;
+              }
+            });
+          });
+
+          container.appendChild(item);
+        }
+      }
+
+      buildRows(
+        "facebook",
+        "facebook",
+        [{ label: "Convert to Audio", format: "audio" }],
+        "Paste Facebook Reel link here",
+      );
+
+      buildRows(
+        "youtube",
+        "youtube",
+        [
+          { label: "Download Video", format: "video" },
+          { label: "Download Audio", format: "audio" },
+        ],
+        "Paste YouTube link here",
+      );
+
+      // ---------- Bulk tab ----------
+      const bulkInput = document.getElementById("bulkInput");
+      const bulkStart = document.getElementById("bulkStart");
+      const bulkSummary = document.getElementById("bulkSummary");
+      const bulkResults = document.getElementById("bulkResults");
+
+      bulkStart.addEventListener("click", async () => {
+        const links = [
+          ...new Set(
+            bulkInput.value
+              .split("\n")
+              .map((l) => l.trim())
+              .filter(Boolean),
+          ),
+        ];
+
+        if (links.length === 0) {
+          bulkSummary.textContent = "Please paste at least one link.";
+          return;
+        }
+
+        bulkStart.disabled = true;
+        bulkInput.disabled = true;
+        bulkResults.innerHTML = "";
+
+        const rows = links.map((link, idx) => {
+          const div = document.createElement("div");
+          div.className = "res";
+          div.innerHTML = `<div>${idx + 1}. </div><small>Waiting...</small>`;
+          div.firstChild.append(document.createTextNode(link));
+          bulkResults.appendChild(div);
+          return div.querySelector("small");
+        });
+
+        let done = 0,
+          failed = 0,
+          next = 0;
+        const update = () => {
+          bulkSummary.textContent = `Finished ${done + failed} of ${links.length} (${failed} failed)`;
+        };
+        update();
+
+        async function worker() {
+          while (next < links.length) {
+            const idx = next++;
+            const statusEl = rows[idx];
+            statusEl.className = "";
+            statusEl.textContent = "Converting...";
+
+            try {
+              const res = await fetch("/save", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ url: links[idx], format: "audio" }),
+              });
+              const data = await res.json().catch(() => ({}));
+              if (!res.ok)
+                throw new Error(data.error || "Something went wrong.");
+
+              statusEl.className = "ok";
+              statusEl.textContent = `Saved: ${data.file}`;
+              done++;
+            } catch (err) {
+              statusEl.className = "error";
+              statusEl.textContent = err.message;
+              failed++;
+            }
+            update();
+          }
+        }
+
+        await Promise.all(
+          Array.from(
+            { length: Math.min(BULK_CONCURRENCY, links.length) },
+            worker,
+          ),
+        );
+
+        bulkSummary.textContent = `All done: ${done} saved, ${failed} failed. Check the "downloads" folder.`;
+        bulkStart.disabled = false;
+        bulkInput.disabled = false;
+      });
     </script>
   </body>
 </html>
