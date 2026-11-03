@@ -1,0 +1,12 @@
+{
+  "name": "reels-audio",
+  "version": "1.0.0",
+  "description": "Local web app: paste a Facebook Reel link, get an MP3",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
